@@ -10,18 +10,24 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import type { Paginated, TaskDetail, TaskSummary } from '@projectflow/shared';
+import type { Paginated, TaskActivityEntry, TaskDetail, TaskSummary } from '@projectflow/shared';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { toObjectId } from '../common/utils/object-id';
+import { AssignTaskDto } from './dto/assign-task.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { ListTasksQueryDto } from './dto/list-tasks.dto';
+import { TaskActivityService } from './task-activity.service';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { TasksService } from './tasks.service';
 
 @Controller()
 export class TasksController {
-  constructor(private readonly tasksService: TasksService) {}
+  constructor(
+    private readonly tasksService: TasksService,
+    private readonly taskActivityService: TaskActivityService,
+  ) {}
 
   @Get('projects/:projectId/tasks')
   findByProject(
@@ -70,14 +76,58 @@ export class TasksController {
   @Patch('tasks/:taskId/status')
   updateStatus(
     @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
     @Body() dto: UpdateTaskStatusDto,
   ): Promise<TaskDetail> {
-    return this.tasksService.updateStatus(toObjectId(taskId, 'task id'), dto);
+    return this.tasksService.updateStatus(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      dto,
+    );
   }
 
   @Delete('tasks/:taskId')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('taskId') taskId: string, @CurrentUser('id') userId: string): Promise<void> {
     return this.tasksService.remove(toObjectId(taskId, 'task id'), toObjectId(userId, 'user id'));
+  }
+
+  @Patch('tasks/:taskId/assignee')
+  assign(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: AssignTaskDto,
+  ): Promise<TaskDetail> {
+    return this.tasksService.assign(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      dto,
+    );
+  }
+
+  @Delete('tasks/:taskId/assignee')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async unassign(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+  ): Promise<void> {
+    await this.tasksService.assign(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      { assigneeId: undefined },
+    );
+  }
+
+  @Get('tasks/:taskId/activity')
+  getActivity(
+    @Param('taskId') taskId: string,
+    @CurrentUser('id') userId: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<Paginated<TaskActivityEntry>> {
+    return this.taskActivityService.findByTask(
+      toObjectId(taskId, 'task id'),
+      toObjectId(userId, 'user id'),
+      query,
+    );
   }
 }

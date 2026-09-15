@@ -43,6 +43,7 @@ export interface ProjectMemberEntry {
 export interface TaskSummary {
   id: string;
   projectId: string;
+  assignee: UserSummary | null;
   number: number;
   key: string;
   title: string;
@@ -66,6 +67,22 @@ export interface CommentEntry {
   author: UserSummary;
   createdAt: string;
   updatedAt: string;
+}
+
+export enum TaskActivityType {
+  TASK_ASSIGNEE_CHANGED = 'TASK_ASSIGNEE_CHANGED',
+}
+
+export interface TaskActivityEntry {
+  id: string;
+  taskId: string;
+  type: TaskActivityType;
+  actor: UserSummary;
+  metadata: {
+    from: UserSummary | null;
+    to: UserSummary | null;
+  };
+  createdAt: string;
 }
 
 export interface AuthSession {

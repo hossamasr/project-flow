@@ -6,7 +6,11 @@ import { Avatar } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { CommentList } from '@/features/comments/components/comment-list';
 import { formatDate } from '@/lib/format';
-import { useTask } from '../hooks';
+import { useCurrentUser } from '@/features/auth/hooks';
+import { useTask, useTaskActivity } from '../hooks';
+import { useProjectMembers } from '@/features/projects/hooks';
+import { AssigneeSelector } from './assignee-selector';
+import { ActivityTimeline } from './activity-timeline';
 import { TaskPriorityBadge } from './task-priority-badge';
 import { TaskStatusSelect } from './task-status-select';
 
@@ -15,8 +19,21 @@ interface TaskViewProps {
   taskId: string;
 }
 
+function canManageProject(projectRole: string | null, orgRole: string | null): boolean {
+  return orgRole === 'OWNER' || orgRole === 'ADMIN' || projectRole === 'PROJECT_MANAGER';
+}
+
 export function TaskView({ projectId, taskId }: TaskViewProps) {
+  const { data: currentUser } = useCurrentUser();
   const { data: task, isPending, isError, error } = useTask(taskId);
+  const { data: members = [] } = useProjectMembers(projectId);
+  const { data: activityData } = useTaskActivity(taskId);
+
+  const currentUserId = currentUser?.id ?? '';
+  const userProjectRole = members.find((m) => m.user.id === currentUserId)?.role ?? null;
+  const userOrgRole = currentUser?.organizations?.[0]?.role ?? null;
+  const canAssign = canManageProject(userProjectRole, userOrgRole) || userProjectRole === 'MEMBER';
+  const canAssignOthers = canManageProject(userProjectRole, userOrgRole);
 
   if (isPending) {
     return (
@@ -35,6 +52,11 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
       </p>
     );
   }
+
+  const handleAssigneeChange = () => {
+    // The mutations handle cache updates optimistically
+    // Just invalidate to ensure sync
+  };
 
   return (
     <div className="space-y-6">
@@ -86,6 +108,16 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
             <TaskPriorityBadge priority={task.priority} />
           </div>
 
+          <AssigneeSelector
+            taskId={task.id}
+            projectId={projectId}
+            currentAssignee={task.assignee}
+            canAssign={canAssign}
+            canAssignOthers={canAssignOthers}
+            currentUserId={currentUserId}
+            onAssigneeChange={handleAssigneeChange}
+          />
+
           <div className="space-y-1.5">
             <h2 className="text-[11px] font-medium uppercase tracking-wide text-subtle-foreground">
               Created by
@@ -104,6 +136,14 @@ export function TaskView({ projectId, taskId }: TaskViewProps) {
           </div>
         </aside>
       </div>
+
+      <section aria-label="Activity" className="mt-10 pt-6 border-t border-border">
+        <h2 className="mb-4 text-sm font-semibold text-foreground">Activity</h2>
+        <ActivityTimeline
+          activities={activityData?.items ?? []}
+          currentUserId={currentUserId}
+        />
+      </section>
     </div>
   );
 }

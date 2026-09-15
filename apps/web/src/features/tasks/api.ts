@@ -1,5 +1,6 @@
 import type {
   Paginated,
+  TaskActivityEntry,
   TaskDetail,
   TaskPriority,
   TaskStatus,
@@ -12,6 +13,10 @@ export interface CreateTaskPayload {
   description?: string;
   priority: TaskPriority;
   status: TaskStatus;
+}
+
+export interface AssignTaskPayload {
+  assigneeId?: string;
 }
 
 /** The board renders every column at once, so tasks are fetched in one page. */
@@ -48,5 +53,24 @@ export function updateTask(
   return apiRequest<TaskDetail>(`/tasks/${taskId}`, {
     method: 'PATCH',
     body: payload,
+  });
+}
+
+export function assignTask(taskId: string, payload: AssignTaskPayload): Promise<TaskDetail> {
+  return apiRequest<TaskDetail>(`/tasks/${taskId}/assignee`, {
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
+export function unassignTask(taskId: string): Promise<void> {
+  return apiRequest<void>(`/tasks/${taskId}/assignee`, {
+    method: 'DELETE',
+  });
+}
+
+export function fetchTaskActivity(taskId: string): Promise<Paginated<TaskActivityEntry>> {
+  return apiRequest<Paginated<TaskActivityEntry>>(`/tasks/${taskId}/activity`, {
+    query: { page: 1, pageSize: 50 },
   });
 }

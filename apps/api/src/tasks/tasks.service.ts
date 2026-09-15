@@ -6,12 +6,16 @@ import { toUserSummary } from '../common/utils/serialize';
 import { Comment, type CommentDocument } from '../comments/schemas/comment.schema';
 import { canManage, ProjectAccessService } from '../projects/project-access.service';
 import { Project, type ProjectDocument } from '../projects/schemas/project.schema';
+import { ProjectMembersService } from '../project-members/project-members.service';
+import { TaskActivityService } from './task-activity.service';
 import { UsersService } from '../users/users.service';
+import type { AssignTaskDto } from './dto/assign-task.dto';
 import type { CreateTaskDto } from './dto/create-task.dto';
 import type { ListTasksQueryDto } from './dto/list-tasks.dto';
 import type { UpdateTaskDto } from './dto/update-task.dto';
 import type { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { Task, type TaskDocument } from './schemas/task.schema';
+import { TaskCounter, type TaskCounterDocument } from './schemas/task-counter.schema';
 
 @Injectable()
 export class TasksService {
@@ -19,7 +23,10 @@ export class TasksService {
     @InjectModel(Task.name) private readonly taskModel: Model<TaskDocument>,
     @InjectModel(Project.name) private readonly projectModel: Model<ProjectDocument>,
     @InjectModel(Comment.name) private readonly commentModel: Model<CommentDocument>,
+    @InjectModel(TaskCounter.name) private readonly counterModel: Model<TaskCounterDocument>,
     private readonly projectAccessService: ProjectAccessService,
+    private readonly projectMembersService: ProjectMembersService,
+    private readonly taskActivityService: TaskActivityService,
     private readonly usersService: UsersService,
   ) {}
 
@@ -58,8 +65,13 @@ export class TasksService {
   ): Promise<TaskDetail> {
     const { project } = await this.projectAccessService.assertCanView(projectId, userId);
 
-    const taskCount = await this.taskModel.countDocuments({ projectId });
-    const number = taskCount + 1;
+    const counter = await this.counterModel.findOneAndUpdate(
+      { projectId },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    ).exec();
+
+    const number = counter.seq;
 
     const task = await this.taskModel.create({
       projectId,
@@ -113,13 +125,47 @@ export class TasksService {
     return this.toDetail(task, access.project);
   }
 
-  async updateStatus(taskId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {
+  async updateStatus(taskId: Types.ObjectId, userId: Types.ObjectId, dto: UpdateTaskStatusDto): Promise<TaskDetail> {
     const task = await this.findTaskOrFail(taskId);
+    await this.projectAccessService.assertCanView(task.projectId, userId);
 
     task.status = dto.status;
     await task.save();
 
     return this.toDetail(task);
+  }
+
+  async assign(
+    taskId: Types.ObjectId,
+    actorId: Types.ObjectId,
+    dto: AssignTaskDto,
+  ): Promise<TaskDetail> {
+    const task = await this.findTaskOrFail(taskId);
+    const access = await this.projectAccessService.assertCanView(task.projectId, actorId);
+
+    const assigneeId = dto.assigneeId ? new Types.ObjectId(dto.assigneeId) : null;
+
+    if (assigneeId !== null) {
+      const assigneeRole = await this.projectMembersService.findRole(task.projectId, assigneeId);
+      if (!assigneeRole) {
+        throw new ForbiddenException('Assignee must be a member of the project');
+      }
+    }
+
+    const canAssignOthers = canManage(access);
+    const isSelfAssignment = assigneeId !== null && assigneeId.equals(actorId);
+
+    if (!canAssignOthers && !isSelfAssignment) {
+      throw new ForbiddenException('You can only assign tasks to yourself');
+    }
+
+    const previousAssignee = task.assignee;
+    task.assignee = assigneeId;
+    await task.save();
+
+    await this.taskActivityService.logAssigneeChange(taskId, actorId, previousAssignee, assigneeId);
+
+    return this.toDetail(task, access.project);
   }
 
   async remove(taskId: Types.ObjectId, userId: Types.ObjectId): Promise<void> {
@@ -142,7 +188,7 @@ export class TasksService {
       return [];
     }
 
-    const [creators, commentRows] = await Promise.all([
+    const [creators, commentRows, assignees] = await Promise.all([
       this.usersService.findManyByIds(tasks.map((task) => task.createdBy)),
       this.commentModel
         .aggregate<{
@@ -153,10 +199,14 @@ export class TasksService {
           { $group: { _id: '$taskId', count: { $sum: 1 } } },
         ])
         .exec(),
+      this.usersService.findManyByIds(
+        tasks.map((task) => task.assignee).filter((a): a is Types.ObjectId => a !== null),
+      ),
     ]);
 
     const creatorsById = new Map(creators.map((user) => [user._id.toString(), user]));
     const commentCounts = new Map(commentRows.map((row) => [row._id.toString(), row.count]));
+    const assigneesById = new Map(assignees.map((user) => [user._id.toString(), user]));
 
     return tasks.map((task) => ({
       id: task._id.toString(),
@@ -167,6 +217,7 @@ export class TasksService {
       status: task.status,
       priority: task.priority,
       commentCount: commentCounts.get(task._id.toString()) ?? 0,
+      assignee: task.assignee ? toUserSummary(assigneesById.get(task.assignee.toString())!) : null,
       createdBy: toCreatorSummary(creatorsById.get(task.createdBy.toString())),
       createdAt: task.createdAt.toISOString(),
       updatedAt: task.updatedAt.toISOString(),
